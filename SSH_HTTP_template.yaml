@@ -6,8 +6,8 @@ Resources:
     InstanceSecurityGroup:
       Type: AWS::EC2::SecurityGroup
       Properties:
-        GroupDescription: Allow SSH access to client
-        GroupName: SSHSecurityGroup
+        GroupDescription: Allow SSH & HTTP access to client
+        GroupName: SSH-HTTP-SecurityGroup
         SecurityGroupIngress:
           - IpProtocol: tcp
             FromPort: 22
