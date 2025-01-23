@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Instalacion de Tomcat en una instancia EC2
+
+Parameters:
+  InstanceName:
+    Description: Nombre de instancia
+    Type: String
+    Default: TomcatInstance
+  InstanceType:
+    Description: Tipo de instancia
+    Type: String
+    Default: t2.small
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+  InstanceImage:
+    Description: AMI de instancia
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+
+Resources:
+  
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: SSH-Tomcat
+      GroupDescription: Acceso SSH desde cualquier punto
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  HTTPSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: HTTP-Tomcat
+      GroupDescription: Acceso HTTP desde cualquier punto
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  Tomcat:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT4M
+        Count: 1
+    Properties:
+      ImagenId: !Ref InstanceImage
+      InstanceType: !Ref InstanceType
+      KeyName: vockey
+      SecurityGroupIds:
+        - !Ref SSHSecurityGroup
+        - !Ref HTTPSecurityGroup
+      UserData:
+        Fn::Base64:
+          !Sub |
+          #!/bin/bash -xe
+          exec > /tmp/userdata.log 2>&1
+          #=================================================================#
+          #           PREPARAR BOOTSTRAP DE CHN HELPER SCRIPTS              #
+          #=================================================================#
+          apt update -y
+          apt upgrade -y
+          apt install python3-pip -y
+          pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+          ln -s /usr/local/init/ubuntu/cfn-hup/etc/init.d/cfn-hup
+          sed -i "s/#\{$nrconf{kernelhints} = -1;\}/\$nrconf{kernelhints} = -1;/g" /etc/needrestart/needrestart.conf
+
+          # Instalación Tomcat y creación de un usuario tomcat sin privilegios
+          useradd -m -d /opt/tomcat -U -s /bin/false tomcat
+          # Instalacion OpenJDK en versión 21
+          apt install openjdk-21-jdk -y
+          # Descarga y descompresión Tomcat 11
+          wget https://dlcdn.apache.org/tomcat/tomcat-11/v11.0.2/bin/apache-tomcat-11.0.2.tar.gz
+          tar zxvf /tmp/tomcat.tar.gz -C /opt/tomcat --strip-components=1
+          # Cambiar permisos de Tomcat
+          chown -R tomcat:tomcat /opt/tomcat/
+          chmod -R u+x /opt/tomcat/bin
+
+          # Configuración usuarios
+          sed -i '</tomcat-users/i \
+          <role rolename="manager-gui" />\n\
+          <user username="manager" password="manager_secret" roles="manager-gui" />\n\
+          <user rolename="admin-gui" />\n\
+          <user username="admin" password="admin_secret" roles="manager-gui,admin-gui" />\n' /opt/tomcat/conf/tomcat-users.xml
+          # Permitimos el acceso desde cualquier host
+          sed -i '</Valve /,/>/ s|<Valve|<!--<Valve|; s|</Valve /,/>/ s|/>|-->|' /opt/tomcat/conf/server.xml
+          sed -i '</Valve /,/>/ s|<Valve|<!--<Valve|; s|</Valve /,/>/ s|/>|-->|' /opt/tomcat/conf/server.xml
+
+          # Crear servicio systemd
+          echo "[Unit]
+          Description=Tomcat
+          After=network.target
+
+          [Service]
+          Type=forking
+
+          User=tomcat
+          Group=tomcat
+
+          Environment="JAVA_HOME=/usr/lib/jvm/java-1.21.0-openjdk-amd64"
+          Environment="JAVA_OPTS=-Djava.security.egd=file:///dev/urandom"
+          Environment="CATALINA_BASE=/opt/tomcat"
+          Environment="CATALINA_HOME=/opt/tomcat"
+          Environment="CATALINA_PID=/opt/tomcat/temp/tomcat.pid"
+          Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
+
+          RestartSec=10
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target" | sudo tee /etc/systemd/system/tomcat.service
+
+          # Recargamos los daemons
+          systemctl daemon-reload
+          # Habilitamos tomcat
+          systemctl enable tomcat
+          # Iniciamos el servicio
+          systemctl start tomcat
+
+          # Este tiene que ser tu última instrucción del script
+          # Recuerda modificar el valor del --resource al id lógico de la instancia
+          /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Tomcat --region ${AWS::Region}
+
+      Tags:
+        - Key: Name 
+          Value: Tomcat

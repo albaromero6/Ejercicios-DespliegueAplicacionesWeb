@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Plantilla SSH Security Group
+Description: Plantilla SSH & HTTP Security Group
 
 # Recursos
 Resources:
