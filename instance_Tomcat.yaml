@@ -58,44 +58,59 @@ Resources:
       Tags:
         - Key: Name 
           Value: Tomcat
-      UserData:
-        Fn::Base64:
+      UserData: 
+        Fn::Base64: 
           !Sub |
             #!/bin/bash -xe
             exec > /tmp/userdata.log 2>&1
-            #=================================================================#
-            #           PREPARAR BOOTSTRAP DE CHN HELPER SCRIPTS              #
-            #=================================================================#
+            #====================================================================#
+            # PREPARAR BOOTSTRAP DE CFN HELPER SCRIPTS
+            #====================================================================#
             apt update -y
-            apt upgrade -y
             apt install python3-pip -y
             pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
             ln -s /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
-            sed -i "s/#\{$nrconf{kernelhints} = -1;/\$nrconf{kernelhints} = -1;/g" /etc/needrestart/needrestart.conf
+            #====================================================================#
+            #-----------------------> SCRIPT DE TOMCAT <-------------------------#
+            #====================================================================#
+            #Comando para desactivar la actualización del Kernel
+            sed -i "s/#\$nrconf{kernelhints} = -1;/\$nrconf{kernelhints} = -1;/g" /etc/needrestart/needrestart.conf
 
-            # Instalación Tomcat y creación de un usuario tomcat sin privilegios
+            # Actualizamos la instancia
+            apt update
+            apt upgrade -y
+
+            # Creamos un usuario sin privilegios llamado tomcat
             useradd -m -d /opt/tomcat -U -s /bin/false tomcat
-            # Instalacion OpenJDK en versión 21
+
+            # Instalamos jdk21 (Java)
             apt install openjdk-21-jdk -y
-            # Descarga y descompresión Tomcat 11
+
+            # Instalamos tomcat11
+            cd /tmp
             wget https://dlcdn.apache.org/tomcat/tomcat-11/v11.0.2/bin/apache-tomcat-11.0.2.tar.gz
-            tar zxvf /tmp/tomcat.tar.gz -C /opt/tomcat --strip-components=1
-            # Cambiar permisos de Tomcat
+
+            # Extraemos los ficheros del enlace de arriba
+            tar xzvf apache-tomcat-11*tar.gz -C /opt/tomcat --strip-components=1
+
+            # Modificamos los permisos del usuario tomcat
             chown -R tomcat:tomcat /opt/tomcat/
             chmod -R u+x /opt/tomcat/bin
 
-            # Configuración usuarios
-            sed -i '/<\/tomcat-users/i \
+            # Configuramos los usuarios administradores
+            sed -i '/<\/tomcat-users>/i \
             <role rolename="manager-gui" />\n\
             <user username="manager" password="manager_secret" roles="manager-gui" />\n\
-            <user rolename="admin-gui" />\n\
+            \n\
+            <role rolename="admin-gui" />\n\
             <user username="admin" password="admin_secret" roles="manager-gui,admin-gui" />' /opt/tomcat/conf/tomcat-users.xml
-            # Permitimos el acceso desde cualquier host
-            sed -i '</Valve /,/>/ s|<Valve|<!--<Valve|; s|</Valve /,/>/ s|/>|-->|' /opt/tomcat/conf/server.xml
-            sed -i '</Valve /,/>/ s|<Valve|<!--<Valve|; s|</Valve /,/>/ s|/>|-->|' /opt/tomcat/conf/server.xml
 
-            # Crear servicio systemd
-            echo "[Unit]
+            # Permitimos el acceso desde cualquier host
+            sed -i '/<Valve /,/\/>/ s|<Valve|<!--<Valve|; /<Valve /,/\/>/ s|/>|/>-->|' /opt/tomcat/webapps/manager/META-INF/context.xml
+            sed -i '/<Valve /,/\/>/ s|<Valve|<!--<Valve|; /<Valve /,/\/>/ s|/>|/>-->|' /opt/tomcat/webapps/host-manager/META-INF/context.xml
+
+            # Creamos un servicio systemd
+            echo '[Unit]
             Description=Tomcat
             After=network.target
 
@@ -119,15 +134,18 @@ Resources:
             Restart=always
 
             [Install]
-            WantedBy=multi-user.target" | sudo tee /etc/systemd/system/tomcat.service
+            WantedBy=multi-user.target' | sudo tee /etc/systemd/system/tomcat.service
 
-            # Recargamos los daemons
+            # Recargamos el daemon
             systemctl daemon-reload
+
             # Habilitamos tomcat
             systemctl enable tomcat
-            # Iniciamos el servicio
+
+            # Iniciamos tomcat
             systemctl start tomcat
 
-            # Este tiene que ser tu última instrucción del script
+            #====================================================================#
+            # Este tiene que ser tu ultima instruccion del script
             # Recuerda modificar el valor del --resource al id lógico de la instancia
             /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Tomcat --region ${AWS::Region}
